@@ -5,3 +5,6 @@ streamlit
 langchain
 duckduckgo-search
 SpeechRecognition
+pyaudio
+faster-whisper
+openai-whisper
