@@ -1,144 +1,282 @@
-# Import necessary libraries  
 import io
 import requests
 import nltk
-from nltk.tokenize import word_tokenize
 import streamlit as st
 import speech_recognition as sr
+
 from PIL import Image
 from gtts import gTTS
-from langchain.llms import OpenAI
-from langchain.agents import AgentType, initialize_agent
-from langchain.callbacks import StreamlitCallbackHandler
-from langchain.chat_models import JinaChat
-from langchain.tools import DuckDuckGoSearchRun
+from nltk.tokenize import word_tokenize
 
-headers = {"Authorization": f"Bearer YOUR_HUGGINGFACE_API_KEY"}
+# --------------------------
+# CONFIG
+# --------------------------
+
+HF_TOKEN = "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"
+
+headers = {
+    "Authorization": f"Bearer {HF_TOKEN}"
+}
+
 nltk.download("punkt")
 
+# --------------------------
+# FUNCTIONS
+# --------------------------
 
-# Define a function to split the summarized text into meaningful words
 def split_into_meaningful_words(text):
     words = word_tokenize(text)
+
     meaningful_words = [
-        word for word in words if word.isalnum()
-    ]  # Keep only alphanumeric words
+        word for word in words
+        if word.isalnum()
+    ]
+
     return ", ".join(meaningful_words)
 
 
-# Define a function to summarize the transcribed text
-def text_summarization_query(payload):
+def chatbot_response(prompt):
+
+    API_URL = (
+        "https://api-inference.huggingface.co/models/google/flan-t5-large"
+    )
+
+    payload = {
+        "inputs": (
+            "You are a health assistant. "
+            "Give general wellness guidance only. "
+            "Do not diagnose diseases.\n\n"
+            + prompt
+        )
+    }
+
+    response = requests.post(
+        API_URL,
+        headers=headers,
+        json=payload
+    )
+
+    result = response.json()
+
+    try:
+        return result[0]["generated_text"]
+
+    except Exception:
+        return str(result)
+
+
+def summarize_text(text):
+
     API_URL = (
         "https://api-inference.huggingface.co/models/sshleifer/distilbart-cnn-12-6"
     )
-    # data = json.dumps(payload)
-    response = requests.request("POST", API_URL, headers=headers, data=payload)
+
+    payload = {
+        "inputs": text,
+        "options": {
+            "wait_for_model": True
+        }
+    }
+
+    response = requests.post(
+        API_URL,
+        headers=headers,
+        json=payload
+    )
+
     return response.json()
 
 
-# Define a function to generate an image of the summarized text
-def text_to_image_query(payload):
+def generate_image(prompt):
+
     API_URL = (
-        # Both these models rendered reasonably good images. Choose which works better according to your use case
-        "https://api-inference.huggingface.co/models/artificialguybr/IconsRedmond-IconsLoraForSDXL"
-        # "https://api-inference.huggingface.co/models/Linaqruf/animagine-xl"
+        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
     )
-    response = requests.post(API_URL, headers=headers, json=payload)
+
+    payload = {
+        "inputs": prompt
+    }
+
+    response = requests.post(
+        API_URL,
+        headers=headers,
+        json=payload
+    )
+
     return response.content
 
 
-# Setup the Streamlit page
-st.set_page_config(page_title="DiagnoAI", page_icon="🤖", layout="centered")
-st.title("🤖 DiagnoAI : Health first!")
+# --------------------------
+# PAGE
+# --------------------------
 
-transcribed_text = ""
-transcription_response = ""
-recognizer = sr.Recognizer()
+st.set_page_config(
+    page_title="DiagnoAI",
+    page_icon="🏥",
+    layout="centered"
+)
 
-# Setup the first chat
+st.title("🏥 DiagnoAI")
+st.subheader("AI Health Assistant")
+
+# --------------------------
+# CHAT HISTORY
+# --------------------------
+
 if "messages" not in st.session_state:
-    st.session_state["messages"] = [
-        {"role": "assistant", "content": "How can I help you?"},
+
+    st.session_state.messages = [
+
+        {
+            "role": "assistant",
+            "content": "Upload a WAV file and I will analyze it."
+        }
+
     ]
 
 for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
 
-# Get the audio input
-audio_file = st.file_uploader("Upload your audio file", type="wav")
+    st.chat_message(
+        msg["role"]
+    ).write(
+        msg["content"]
+    )
+
+# --------------------------
+# AUDIO UPLOAD
+# --------------------------
+
+audio_file = st.file_uploader(
+    "Upload WAV Audio",
+    type=["wav"]
+)
+
+recognizer = sr.Recognizer()
 
 if audio_file:
+
     st.audio(audio_file)
 
-    # Transcribe the audio
-    with st.spinner("Transcribing... Please wait"):
-        with sr.AudioFile(audio_file.name) as source:
-            text = recognizer.listen(source=source)
-        transcribed_text = recognizer.recognize_google(text, show_all=False)
-    st.session_state.messages.append({"role": "user", "content": transcribed_text})
-    st.chat_message("user").write(transcribed_text)
+    with open("temp.wav", "wb") as f:
 
-    # Setup closed-source JinaChat API. You can replace this with OpenAI or any other chat-based LLM
-    chat = JinaChat(
-        temperature=0.2,
-        streaming=True,
-        jinachat_api_key="YOU_API_KEY",
+        f.write(
+            audio_file.read()
+        )
+
+    # ----------------------
+    # SPEECH TO TEXT
+    # ----------------------
+
+    with st.spinner(
+        "Transcribing..."
+    ):
+
+        with sr.AudioFile(
+            "temp.wav"
+        ) as source:
+
+            audio = recognizer.record(
+                source
+            )
+
+        transcribed_text = (
+            recognizer.recognize_google(
+                audio
+            )
+        )
+
+    st.chat_message(
+        "user"
+    ).write(
+        transcribed_text
     )
 
-    # Initialize the transcription agent with DuckDuckGo and JinaChat
-    transcription_agent = initialize_agent(
-        tools=[DuckDuckGoSearchRun(name="Search")],
-        llm=chat,
-        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-        handle_parsing_errors=True,
-        verbose=True,
+    # ----------------------
+    # AI RESPONSE
+    # ----------------------
+
+    with st.spinner(
+        "Generating response..."
+    ):
+
+        ai_response = chatbot_response(
+            transcribed_text
+        )
+
+    st.chat_message(
+        "assistant"
+    ).write(
+        ai_response
     )
 
-    # Initialize the text to speech agent
-    output_filename = "Output_Audio.wav"
+    # ----------------------
+    # TEXT TO SPEECH
+    # ----------------------
 
-    # Setup the chat for response
-    with st.chat_message("assistant"):
-        st_cb = StreamlitCallbackHandler(st.container(), expand_new_thoughts=False)
+    with st.spinner(
+        "Generating voice..."
+    ):
 
-        # Transcription Chat
-        with st.spinner("Loading... Please wait"):
-            transcription_response = transcription_agent.run(
-                st.session_state.messages, callbacks=[st_cb]
-            )
-            st.session_state.messages.append(
-                {"role": "assistant", "content": transcription_response}
-            )
-        st.write(transcription_response)
+        speech = gTTS(
+            text=ai_response,
+            lang="en"
+        )
 
-        # Text to Voice Chat
-        with st.spinner("Generating voice output... Please wait"):
-            speech = gTTS(text=transcription_response, lang="en", slow=False)
-            speech_response = speech.save(output_filename)
-            st.session_state.messages.append(
-                {"role": "assistant", "content": speech_response}
-            )
-        st.audio(output_filename)
+        speech.save(
+            "response.mp3"
+        )
 
-        # Text to Image Chat
-        with st.spinner("Generating image output... Please wait"):
-            summarized_text = text_summarization_query(
-                {
-                    "inputs": str(transcription_response)
-                    + "-- Please summarize the given text into actionable keywords. Should not exceed 20 words.",
-                    "options": {"wait_for_model": True},
-                }
+    st.audio(
+        "response.mp3"
+    )
+
+    # ----------------------
+    # SUMMARIZE
+    # ----------------------
+
+    with st.spinner(
+        "Summarizing..."
+    ):
+
+        summary = summarize_text(
+            ai_response
+        )
+
+        prompt_words = (
+            split_into_meaningful_words(
+                str(summary)
             )
-            prompt_words = split_into_meaningful_words(str(summarized_text))
-            image_bytes = text_to_image_query(
-                {
-                    "inputs": prompt_words
-                    + "1 human, english language, exercise, healthy diet, medicines, vegetables, fruits",
-                    "options": {"wait_for_model": True},
-                }
+        )
+
+    # ----------------------
+    # IMAGE GENERATION
+    # ----------------------
+
+    with st.spinner(
+        "Generating image..."
+    ):
+
+        image_prompt = (
+            prompt_words
+            + ", healthy lifestyle, doctor, exercise, fruits, vegetables"
+        )
+
+        image_bytes = generate_image(
+            image_prompt
+        )
+
+        image = Image.open(
+            io.BytesIO(
+                image_bytes
             )
-            image_response = Image.open(io.BytesIO(image_bytes))
-            st.session_state.messages.append(
-                {"role": "assistant", "content": image_response}
-            )
-        st.image(image_response, use_column_width="auto")
+        )
+
+    st.image(
+        image,
+        caption="AI Generated Health Image",
+        use_container_width=True
+    )
+
+    st.success(
+        "Analysis Completed"
+    )
